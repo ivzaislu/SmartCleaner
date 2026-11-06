@@ -69,8 +69,8 @@ class SourceTests(unittest.TestCase):
         d = [device("RTX", r"PCI\VEN_10DE&DEV_1234"),
              device("Audio", r"PCI\VEN_10EC&DEV_0001"),
              device("Mystery", r"PCI\VEN_FFFF&DEV_0000")]
-        sources = official_device_sources(d, OEMSupport(
-            "Dell", "Laptop", "https://www.dell.com/support/home"))
+        oem = OEMSupport("Dell", "Laptop", "https://www.dell.com/support/home")
+        sources = official_device_sources(d, oem)
         self.assertEqual(len(sources), 3)
         self.assertTrue(all(isinstance(s, DeviceDriverSource) for s in sources))
         unknown = next(s for s in sources if s.device == "Mystery")
@@ -78,7 +78,7 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(unknown.url, "https://www.dell.com/support/home")
         realtek = next(s for s in sources if s.device == "Audio")
         self.assertIn("предпочтителен", realtek.guidance)
-        self.assertEqual(official_device_sources(d + d), sources)
+        self.assertEqual(official_device_sources(d + d, oem), sources)
 
     @patch("smartcleaner.driver_updates.powershell_rows")
     def test_scan_enumerates_devices_even_without_windows_updates(self, command):
