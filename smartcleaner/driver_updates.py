@@ -7,6 +7,7 @@ from typing import NamedTuple
 
 from smartcleaner.windows_tools import powershell_rows
 from smartcleaner.driver_actions import DriverToken
+from smartcleaner.driver_sources import official_device_sources
 
 
 class DriverOffer(NamedTuple):
@@ -31,17 +32,21 @@ class DriverSearch(NamedTuple):
     partial: bool
     tokens: dict[DriverOffer, DriverToken] | None = None
     oem: OEMSupport | None = None
+    sources: list | None = None
 
 
 DEVICE_INVENTORY = r"""
 $drivers = @{}
 Get-CimInstance Win32_PnPSignedDriver | ForEach-Object {
-    if ($_.DeviceID) { $drivers[$_.DeviceID] = $_.DriverVersion }
+    if ($_.DeviceID) { $drivers[$_.DeviceID] = $_ }
 }
 Get-CimInstance Win32_PnPEntity | ForEach-Object {
+    $driver = if ($_.DeviceID) { $drivers[$_.DeviceID] } else { $null }
     [pscustomobject]@{
         Name = $_.Name
-        Version = if ($_.DeviceID) { $drivers[$_.DeviceID] } else { $null }
+        DeviceID = $_.DeviceID
+        Version = if ($driver) { $driver.DriverVersion } else { $null }
+        Provider = if ($driver) { $driver.DriverProviderName } else { $null }
         Identifiers = @($_.HardwareID) + @($_.CompatibleID)
     }
 }
@@ -167,7 +172,8 @@ def check_driver_updates():
             or result[0]["ResultCode"] not in (2, 3)):
         raise OSError("Windows Update вернул неполный ответ без статуса.")
     updates = result[1:]
-    devices = powershell_rows(DEVICE_INVENTORY) if updates else []
+    # Enumerate ALL devices even when Windows Update has no newer packages.
+    devices = powershell_rows(DEVICE_INVENTORY)
     if not isinstance(devices, list):
         raise OSError("Не удалось прочитать инвентаризацию устройств.")
     try:
@@ -176,4 +182,5 @@ def check_driver_updates():
         oem = None
     return DriverSearch(compare_offers(devices, updates), datetime.now().astimezone(),
                         result[0]["ResultCode"] == 3,
-                        _tokens_for_offers(devices, updates), oem)
+                        _tokens_for_offers(devices, updates), oem,
+                        official_device_sources(devices, oem))
