@@ -603,7 +603,9 @@ class SmartCleanerMainWindow(QMainWindow if PYSIDE6_AVAILABLE else object):
             "Драйверы", "Источник обновлений — служба Windows Update, настроенная на этом компьютере. "
             "Она подбирает предложения по оборудованию и версии Windows. "
             "Версия определяется по названию пакета, если она там указана. "
-            "Загрузка/установка возможна только через Windows Update. OEM — официальный портал вручную.",
+            "Загрузка/установка возможна только через Windows Update. "
+            "Для NVIDIA, AMD и Intel доступны официальные инструменты внешней проверки; "
+            "результаты производителей SmartCleaner самостоятельно не считывает.",
             ["Устройство", "Поставщик", "Установлено", "Подпись", "ID"])
         layout = page.layout()
         offer_status = QLabel("Проверка обновлений ещё не запускалась.")
@@ -617,10 +619,11 @@ class SmartCleanerMainWindow(QMainWindow if PYSIDE6_AVAILABLE else object):
             "Официальный сайт не означает наличия нового драйвера.")
         source_status.setWordWrap(True)
         layout.addWidget(source_status)
-        sources_table = QTableWidget(0, 5)
+        sources_table = QTableWidget(0, 8)
         sources_table.setObjectName("device_driver_sources")
         sources_table.setHorizontalHeaderLabels(
-            ["Устройство", "Версия", "Производитель", "Источник", "ID оборудования"])
+            ["Устройство", "Установлено", "Предложено WUA", "Статус",
+             "Производитель", "Источник", "ID оборудования", "Внешняя проверка"])
         sources_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         sources_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         sources_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -749,6 +752,11 @@ class SmartCleanerMainWindow(QMainWindow if PYSIDE6_AVAILABLE else object):
         vendor_link = self._button(
             controls, "Официальный сайт выбранного устройства", lambda: open_vendor())
         vendor_link.setEnabled(False)
+        assistant_link = self._button(
+            controls, "Проверить через инструмент производителя", lambda: open_assistant())
+        assistant_link.setToolTip(
+            "Открывает только официальный сайт. Установку запускает пользователь.")
+        assistant_link.setEnabled(False)
         source_entries = {"items": []}
 
         def selected_source():
@@ -760,6 +768,22 @@ class SmartCleanerMainWindow(QMainWindow if PYSIDE6_AVAILABLE else object):
             entry = selected_source()
             vendor_link.setEnabled(
                 entry is not None and is_trusted_support_url(entry.url))
+            assistant_link.setEnabled(
+                entry is not None and is_trusted_support_url(entry.assisted_check_url))
+
+        def open_assistant():
+            entry = selected_source()
+            if entry is None or not is_trusted_support_url(entry.assisted_check_url):
+                return
+            QMessageBox.information(
+                self, "Проверка производителя",
+                "Будет открыт официальный сайт инструмента производителя. "
+                "SmartCleaner не устанавливает и не запускает сторонний "
+                "пакет и не считывает результаты этого инструмента. "
+                "Проверьте устройство, совместимость и предупреждения OEM.")
+            if not QDesktopServices.openUrl(QUrl(entry.assisted_check_url)):
+                QMessageBox.warning(
+                    self, "Проверка производителя", "Не удалось открыть официальный сайт.")
 
         def open_vendor():
             entry = selected_source()
@@ -779,18 +803,40 @@ class SmartCleanerMainWindow(QMainWindow if PYSIDE6_AVAILABLE else object):
             self._show_rows(offers, result.offers)
             update_selection()
             source_entries["items"] = list(result.sources or [])
-            self._show_rows(
-                sources_table,
-                ((entry.device, entry.installed, entry.manufacturer,
-                  "Официальный сайт — проверка вручную" if is_trusted_support_url(entry.url)
-                  else "Источник не определён", entry.hardware_id)
-                 for entry in source_entries["items"]))
+            reviews = {(review.device, review.installed, review.hardware_id): review
+                       for review in (result.assessments or [])}
+            status_labels = {
+                "WUA_NEWER": "WUA: сопоставимая версия выше",
+                "WUA_OFFER": "WUA: есть применимый пакет",
+                "WUA_NOT_NEWER": "WUA: версия не выше",
+                "VENDOR_ASSISTANT": "Проверить в официальном инструменте",
+                "MANUAL": "У производителя не проверено",
+                "UNKNOWN": "Актуальность неизвестна",
+                "INCOMPLETE": "WUA: проверка неполная",
+            }
+            source_rows = []
+            for entry in source_entries["items"]:
+                review = reviews.get((entry.device, entry.installed, entry.hardware_id))
+                status = status_labels.get(review.status, "У производителя не проверено") if review else (
+                    "Официальный инструмент" if entry.assisted_check_url else "Проверка вручную")
+                source_rows.append((
+                    entry.device, entry.installed, review.offered if review else "—",
+                    status, entry.manufacturer,
+                    review.origin if review else "Производитель / OEM", entry.hardware_id,
+                    "Официальный инструмент" if is_trusted_support_url(entry.assisted_check_url)
+                    else "—"))
+            self._show_rows(sources_table, source_rows)
             for row, entry in enumerate(source_entries["items"]):
                 for column in range(sources_table.columnCount()):
                     item = sources_table.item(row, column)
                     if item is not None:
-                        item.setToolTip(entry.guidance +
-                                        (f"\n{entry.url}" if is_trusted_support_url(entry.url) else ""))
+                        review = reviews.get((entry.device, entry.installed, entry.hardware_id))
+                        item.setToolTip(
+                            (review.explanation + "\n" if review else "") +
+                            entry.guidance +
+                            (f"\n{entry.url}" if is_trusted_support_url(entry.url) else "") +
+                            (f"\n{entry.assisted_check_url}" if is_trusted_support_url(
+                                entry.assisted_check_url) else ""))
             source_status.setText(
                 f"Обнаружено устройств: {len(source_entries['items'])}. "
                 "Официальные ссылки не являются результатом проверки версии "
@@ -820,6 +866,7 @@ class SmartCleanerMainWindow(QMainWindow if PYSIDE6_AVAILABLE else object):
             self._show_rows(sources_table, [])
             source_status.setText("Выполняется инвентаризация устройств…")
             vendor_link.setEnabled(False)
+            assistant_link.setEnabled(False)
             install.setEnabled(False)
             hold_update.setEnabled(False)
             oem_link.setEnabled(False)
