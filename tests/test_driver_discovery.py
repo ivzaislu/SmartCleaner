@@ -9,7 +9,8 @@ from unittest.mock import patch
 
 from smartcleaner.driver_discovery import build_assessments, compare_versions
 from smartcleaner.driver_sources import official_device_sources
-from smartcleaner.driver_updates import DriverOffer, DriverSearch, check_driver_updates
+from smartcleaner.driver_updates import (DriverOffer, DriverSearch, check_driver_updates,
+                                         _tokens_for_offers)
 
 
 def device(name, identifier, version="31.0.0.1"):
@@ -88,6 +89,23 @@ class AssessmentTests(unittest.TestCase):
             with self.subTest(name=name):
                 item, = official_device_sources([device(name, identifier)])
                 self.assertEqual(item.assisted_check_url, "")
+
+    def test_wua_download_action_requires_single_matching_new_device(self):
+        guid = "12345678-1234-4234-8234-123456789012"
+        d = device("Intel Adapter", r"PCI\\VEN_8086&DEV_1234", "31.0.0.1")
+        row = {"Title": "Intel - Net - 32.0.0.1", "Provider": "Intel",
+               "HardwareID": d["DeviceID"], "UpdateID": guid,
+               "Revision": 3, "IsBeta": False}
+        self.assertEqual(len(_tokens_for_offers([d], [row])), 1)
+        self.assertEqual(_tokens_for_offers([], [row]), {})
+        self.assertEqual(_tokens_for_offers([d, d], [row]), {})
+        older = dict(row, Title="Intel - Net - 30.0.0.1")
+        self.assertEqual(_tokens_for_offers([d], [older]), {})
+        same = dict(row, Title="Intel - Net - 31.0.0.1")
+        self.assertEqual(_tokens_for_offers([d], [same]), {})
+        # A generic compatibility ID can match multiple devices: fail closed.
+        d2 = device("Second Adapter", d["DeviceID"], "31.0.0.1")
+        self.assertEqual(_tokens_for_offers([d, d2], [row]), {})
 
     @patch("smartcleaner.driver_updates.powershell_rows")
     def test_evidence_from_wua_and_inventory(self, query):
