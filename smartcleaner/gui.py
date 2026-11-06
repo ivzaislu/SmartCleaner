@@ -38,6 +38,7 @@ from smartcleaner.analyzer import DiskAnalyzerEngine
 from smartcleaner.app_cache import application_caches, leftover_candidates
 from smartcleaner.driver_updates import check_driver_updates
 from smartcleaner.driver_actions import download_driver, install_driver
+from smartcleaner.driver_sources import is_trusted_support_url
 from smartcleaner.diagnostics import SmartCleanerDelete, SystemDiagnostics
 from smartcleaner.extensions import StartupManager, DriverManager, ApplicationManager, SchedulerService
 
@@ -611,6 +612,20 @@ class SmartCleanerMainWindow(QMainWindow if PYSIDE6_AVAILABLE else object):
         oem_status = QLabel("OEM: сначала запустите сканирование.")
         oem_status.setWordWrap(True)
         layout.addWidget(oem_status)
+        source_status = QLabel(
+            "Источники устройств: сначала запустите сканирование. "
+            "Официальный сайт не означает наличия нового драйвера.")
+        source_status.setWordWrap(True)
+        layout.addWidget(source_status)
+        sources_table = QTableWidget(0, 5)
+        sources_table.setObjectName("device_driver_sources")
+        sources_table.setHorizontalHeaderLabels(
+            ["Устройство", "Версия", "Производитель", "Источник", "ID оборудования"])
+        sources_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        sources_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        sources_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        sources_table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(sources_table)
         offers = QTableWidget(0, 7)
         offers.setHorizontalHeaderLabels(["Устройство", "Установлено", "Предлагается",
                                           "Дата драйвера", "Обновление Windows Update",
@@ -731,10 +746,56 @@ class SmartCleanerMainWindow(QMainWindow if PYSIDE6_AVAILABLE else object):
 
         oem_link.clicked.connect(open_oem)
 
+        vendor_link = self._button(
+            controls, "Официальный сайт выбранного устройства", lambda: open_vendor())
+        vendor_link.setEnabled(False)
+        source_entries = {"items": []}
+
+        def selected_source():
+            row = sources_table.currentRow()
+            entries = source_entries["items"]
+            return entries[row] if 0 <= row < len(entries) else None
+
+        def update_vendor_selection():
+            entry = selected_source()
+            vendor_link.setEnabled(
+                entry is not None and is_trusted_support_url(entry.url))
+
+        def open_vendor():
+            entry = selected_source()
+            if entry is None or not is_trusted_support_url(entry.url):
+                QMessageBox.warning(
+                    self, "Источник драйвера",
+                    "Для устройства нет подтверждённого официального сайта.")
+                return
+            if not QDesktopServices.openUrl(QUrl(entry.url)):
+                QMessageBox.warning(self, "Источник драйвера",
+                                    "Не удалось открыть страницу производителя.")
+
+        sources_table.itemSelectionChanged.connect(update_vendor_selection)
+
         def render(result):
             selected_scan["result"] = result
             self._show_rows(offers, result.offers)
             update_selection()
+            source_entries["items"] = list(result.sources or [])
+            self._show_rows(
+                sources_table,
+                ((entry.device, entry.installed, entry.manufacturer,
+                  "Официальный сайт — проверка вручную" if is_trusted_support_url(entry.url)
+                  else "Источник не определён", entry.hardware_id)
+                 for entry in source_entries["items"]))
+            for row, entry in enumerate(source_entries["items"]):
+                for column in range(sources_table.columnCount()):
+                    item = sources_table.item(row, column)
+                    if item is not None:
+                        item.setToolTip(entry.guidance +
+                                        (f"\n{entry.url}" if is_trusted_support_url(entry.url) else ""))
+            source_status.setText(
+                f"Обнаружено устройств: {len(source_entries['items'])}. "
+                "Официальные ссылки не являются результатом проверки версии "
+                "и не позволяют автоматически устанавливать драйверы.")
+            update_vendor_selection()
             oem_link.setEnabled(result.oem is not None)
             if result.oem is None:
                 oem_status.setText("OEM: официальный портал не определён; "
@@ -755,6 +816,10 @@ class SmartCleanerMainWindow(QMainWindow if PYSIDE6_AVAILABLE else object):
         def start():
             selected_scan["result"] = None
             self._show_rows(offers, [])
+            source_entries["items"] = []
+            self._show_rows(sources_table, [])
+            source_status.setText("Выполняется инвентаризация устройств…")
+            vendor_link.setEnabled(False)
             install.setEnabled(False)
             hold_update.setEnabled(False)
             oem_link.setEnabled(False)
