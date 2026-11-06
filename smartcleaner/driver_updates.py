@@ -8,6 +8,7 @@ from typing import NamedTuple
 from smartcleaner.windows_tools import powershell_rows
 from smartcleaner.driver_actions import DriverToken
 from smartcleaner.driver_sources import official_device_sources
+from smartcleaner.driver_discovery import build_assessments
 
 
 class DriverOffer(NamedTuple):
@@ -33,6 +34,7 @@ class DriverSearch(NamedTuple):
     tokens: dict[DriverOffer, DriverToken] | None = None
     oem: OEMSupport | None = None
     sources: list | None = None
+    assessments: list | None = None
 
 
 DEVICE_INVENTORY = r"""
@@ -180,7 +182,9 @@ def check_driver_updates():
         oem = detect_oem()
     except (OSError, ValueError, TypeError, KeyError):
         oem = None
-    return DriverSearch(compare_offers(devices, updates), datetime.now().astimezone(),
-                        result[0]["ResultCode"] == 3,
-                        _tokens_for_offers(devices, updates), oem,
-                        official_device_sources(devices, oem))
+    offers = compare_offers(devices, updates)
+    partial = result[0]["ResultCode"] == 3
+    return DriverSearch(offers, datetime.now().astimezone(), partial,
+                        _tokens_for_offers(devices, updates) if not partial else {},
+                        oem, official_device_sources(devices, oem),
+                        build_assessments(devices, offers, oem=oem, partial=partial))
