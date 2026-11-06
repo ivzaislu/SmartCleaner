@@ -37,6 +37,7 @@ from smartcleaner.browser_cleaner import BrowserCacheCleaner
 from smartcleaner.analyzer import DiskAnalyzerEngine
 from smartcleaner.app_cache import application_caches, leftover_candidates
 from smartcleaner.driver_updates import check_driver_updates
+from smartcleaner.driver_actions import download_driver, install_driver
 from smartcleaner.diagnostics import SmartCleanerDelete, SystemDiagnostics
 from smartcleaner.extensions import StartupManager, DriverManager, ApplicationManager, SchedulerService
 
@@ -600,12 +601,16 @@ class SmartCleanerMainWindow(QMainWindow if PYSIDE6_AVAILABLE else object):
         page, controls, table = self._data_page(
             "Драйверы", "Источник обновлений — служба Windows Update, настроенная на этом компьютере. "
             "Она подбирает предложения по оборудованию и версии Windows. "
-            "Номер предлагаемой версии показывается, если он есть в названии обновления.",
+            "Версия определяется по названию пакета, если она там указана. "
+            "Загрузка/установка возможна только через Windows Update. OEM — официальный портал вручную.",
             ["Устройство", "Поставщик", "Установлено", "Подпись", "ID"])
         layout = page.layout()
         offer_status = QLabel("Проверка обновлений ещё не запускалась.")
         offer_status.setWordWrap(True)
         layout.addWidget(offer_status)
+        oem_status = QLabel("OEM: сначала запустите сканирование.")
+        oem_status.setWordWrap(True)
+        layout.addWidget(oem_status)
         offers = QTableWidget(0, 7)
         offers.setHorizontalHeaderLabels(["Устройство", "Установлено", "Предлагается",
                                           "Дата драйвера", "Обновление Windows Update",
@@ -640,11 +645,104 @@ class SmartCleanerMainWindow(QMainWindow if PYSIDE6_AVAILABLE else object):
 
         install = self._button(controls, "Перейти к обновлению выбранного", open_update)
         install.setEnabled(False)
-        offers.itemSelectionChanged.connect(
+offers.itemSelectionChanged.connect(
             lambda: install.setEnabled(bool(offers.selectedItems())))
 
+        # Holding the button for 1500 ms triggers a WUA download only.
+        # Installation still requires a separate confirmation dialog.
+        selected_scan = {"result": None}
+        action_output = QTextEdit(page)
+        action_output.setVisible(False)
+        hold_update = QPushButton("Удерживайте 1,5 с — скачать выбранный драйвер")
+        hold_update.setToolTip("Только Windows Update Agent; сторонние EXE не запускаются")
+        controls.addWidget(hold_update)
+        hold_timer = QTimer(hold_update)
+        hold_timer.setSingleShot(True)
+
+        def selected_offer():
+            result = selected_scan["result"]
+            row = offers.currentRow()
+            if result is None or result.partial or row < 0 or row >= len(result.offers):
+                return None
+            offer = result.offers[row]
+            token = (result.tokens or {}).get(offer)
+            return (offer, token) if token else None
+
+        def update_selection():
+            hold_update.setEnabled(selected_offer() is not None)
+
+        def action_error(error):
+            offer_status.setText("Операция не завершена. Подробности в предупреждении.")
+            QMessageBox.warning(self, "Windows Update", error)
+            update_selection()
+
+        def begin_download():
+            selection = selected_offer()
+            if selection is None or not hold_update.isDown():
+                return
+            offer, token = selection
+
+            def installed(result):
+                offer_status.setText("Результат установки: " + result.message +
+                                     (". Нужна перезагрузка." if result.reboot_required else "."))
+                try:
+                    self.logger.log_operation("DRIVER_INSTALL", offer.device,
+                                              details=f"WUA: {offer.title}; {result.message}")
+                except sqlite3.Error:
+                    pass
+                QMessageBox.information(self, "Windows Update", offer_status.text())
+                update_selection()
+
+            def downloaded(result):
+                offer_status.setText(f"{offer.device}: загружено через Windows Update; не установлено.")
+                answer = QMessageBox.question(
+                    self, "Подтверждение установки драйвера",
+                    f"Установить драйвер?\n\nУстройство: {offer.device}\n"
+                    f"Поставщик: {offer.provider}\nПакет: {offer.title}\n\n"
+                    "Драйвер может потребовать перезагрузку. "
+                    "Windows Update повторно проверит применимость пакета.",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No)
+                if answer == QMessageBox.StandardButton.Yes:
+                    self._run_job(hold_update, action_output,
+                                  lambda: install_driver(offer, token, confirmed=True),
+                                  installed, action_error)
+                else:
+                    update_selection()
+
+            offer_status.setText(f"Загрузка {offer.device} через Windows Update…")
+            self._run_job(hold_update, action_output,
+                          lambda: download_driver(offer, token), downloaded, action_error)
+
+        hold_timer.timeout.connect(begin_download)
+        hold_update.pressed.connect(lambda: hold_timer.start(1500))
+        hold_update.released.connect(hold_timer.stop)
+        hold_update.setEnabled(False)
+        offers.itemSelectionChanged.connect(update_selection)
+
+        oem_link = QPushButton("Официальная поддержка производителя ПК")
+        oem_link.setEnabled(False)
+        controls.addWidget(oem_link)
+
+        def open_oem():
+            result = selected_scan["result"]
+            if result is not None and result.oem is not None:
+                QDesktopServices.openUrl(QUrl(result.oem.url))
+
+        oem_link.clicked.connect(open_oem)
+
         def render(result):
+            selected_scan["result"] = result
             self._show_rows(offers, result.offers)
+            update_selection()
+            oem_link.setEnabled(result.oem is not None)
+            if result.oem is None:
+                oem_status.setText("OEM: официальный портал не определён; "
+                                   "проверка OEM-версий автоматически не выполнялась.")
+            else:
+                oem_status.setText(
+                    f"OEM: {result.oem.manufacturer} / {result.oem.model}. "
+                    "Официальный сайт доступен по кнопке; версии OEM проверяются вручную.")
             stamp = result.checked_at.strftime("%d.%m.%Y %H:%M")
             if result.partial:
                 message = f"Windows Update завершил проверку с ошибками. Строк: {len(result.offers)}."
@@ -655,8 +753,11 @@ class SmartCleanerMainWindow(QMainWindow if PYSIDE6_AVAILABLE else object):
             offer_status.setText(f"{message} Проверено: {stamp}.")
 
         def start():
+            selected_scan["result"] = None
             self._show_rows(offers, [])
             install.setEnabled(False)
+            hold_update.setEnabled(False)
+            oem_link.setEnabled(False)
             offer_status.setText("Запрос к Windows Update. Это может занять несколько минут…")
             self._run_job(search, offers, check_driver_updates, render,
                           on_error=lambda error: offer_status.setText(
