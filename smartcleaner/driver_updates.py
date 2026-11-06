@@ -8,7 +8,7 @@ from typing import NamedTuple
 from smartcleaner.windows_tools import powershell_rows
 from smartcleaner.driver_actions import DriverToken
 from smartcleaner.driver_sources import official_device_sources
-from smartcleaner.driver_discovery import build_assessments
+from smartcleaner.driver_discovery import build_assessments, compare_versions
 
 
 class DriverOffer(NamedTuple):
@@ -82,13 +82,25 @@ for ($index = 0; $index -lt $result.Updates.Count; $index++) {
 """
 
 
+def _device_identifiers(device):
+    identifiers = device.get("Identifiers") or []
+    if isinstance(identifiers, str):
+        identifiers = [identifiers]
+    if not isinstance(identifiers, (list, tuple)):
+        identifiers = []
+    values = [device.get("DeviceID"), device.get("HardwareID"), *identifiers]
+    return {v.strip().casefold() for v in values
+            if isinstance(v, str) and v.strip()}
+
+
 def compare_offers(devices, updates):
     by_identifier = {}
     for device in devices:
-        for identifier in device.get("Identifiers") or []:
-            if isinstance(identifier, str) and identifier:
-                by_identifier.setdefault(identifier.casefold(), set()).add(
-                    (device.get("Name") or "Неизвестное устройство", device.get("Version") or "—"))
+        if not isinstance(device, dict):
+            continue
+        for identifier in _device_identifiers(device):
+            by_identifier.setdefault(identifier, set()).add(
+                (device.get("Name") or "Неизвестное устройство", device.get("Version") or "—"))
     offers = []
     for update in updates:
         title = update.get("Title") or "Драйвер Windows Update"
@@ -147,6 +159,8 @@ def _tokens_for_offers(devices, updates):
     tokens = {}
     ambiguous = set()
     for row in updates:
+        if not isinstance(row, dict):
+            continue
         try:
             update_id = str(uuid.UUID(row["UpdateID"]))
             revision = row["Revision"]
@@ -155,9 +169,23 @@ def _tokens_for_offers(devices, updates):
             token = DriverToken(update_id, revision)
         except (KeyError, TypeError, ValueError, AttributeError):
             continue
-        if not row.get("HardwareID") or not row.get("Provider") or not row.get("Title"):
+        hardware_id = row.get("HardwareID")
+        if not isinstance(hardware_id, str) or not hardware_id.strip():
             continue
-        for offer in compare_offers(devices, [row]):
+        if not row.get("Provider") or not row.get("Title"):
+            continue
+        # Do not expose an update action for an unmatched WUA offer: Windows
+        # Update may apply it by internal policy, but the UI cannot safely
+        # assert which specific device will be affected.
+        matching = [d for d in devices if isinstance(d, dict)
+                    and hardware_id.strip().casefold() in _device_identifiers(d)]
+        if len(matching) != 1:
+            continue
+        for offer in compare_offers(matching, [row]):
+            # If numeric versions are truly comparable and the WUA offer is
+            # not newer, present the information but disable "Update".
+            if compare_versions(offer.installed, offer.offered) in (0, -1):
+                continue
             if offer in tokens and tokens[offer] != token:
                 ambiguous.add(offer)
             else:
