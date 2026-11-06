@@ -6,6 +6,7 @@ Automatic download and installation remain exclusively with Windows Update.
 """
 import re
 from typing import NamedTuple
+from urllib.parse import urlsplit
 
 
 class DeviceDriverSource(NamedTuple):
@@ -60,6 +61,27 @@ PROVIDER_NAMES = (
     (re.compile(r"^mediatek(?:\b|\s)", re.I), "MediaTek"),
     (re.compile(r"^creative(?:\b|\s)", re.I), "Creative"),
 )
+
+
+TRUSTED_HOSTS = frozenset((
+    "www.nvidia.com", "www.amd.com", "www.intel.com", "www.realtek.com",
+    "www.broadcom.com", "www.qualcomm.com", "support.creative.com",
+    "www.dell.com", "support.hp.com", "pcsupport.lenovo.com",
+    "www.asus.com", "support.microsoft.com",
+))
+
+
+def is_trusted_support_url(value):
+    """Fail closed on non-HTTPS links or lookalike domains."""
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = urlsplit(value)
+        return (parsed.scheme == "https" and parsed.hostname in TRUSTED_HOSTS
+                and parsed.username is None and parsed.password is None
+                and parsed.port in (None, 443))
+    except ValueError:
+        return False
 
 
 def _identifiers(device):
@@ -126,7 +148,7 @@ def official_device_sources(devices, oem=None):
         else:
             guidance = ("Подтверждённого прямого каталога драйверов нет. "
                         "Проверяйте драйвер по модели ПК у OEM.")
-        if not url and oem is not None:
+        if not url and oem is not None and is_trusted_support_url(oem.url):
             manufacturer = manufacturer or ("OEM: " + oem.manufacturer)
             url = oem.url
         result.append(DeviceDriverSource(name, version, manufacturer or "Не определён",
