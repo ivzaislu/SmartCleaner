@@ -16,6 +16,7 @@ class DeviceDriverSource(NamedTuple):
     hardware_id: str
     url: str
     guidance: str
+    assisted_check_url: str = ""
 
 
 # Official pages manually verified. Never derive a URL from input metadata.
@@ -28,6 +29,16 @@ VENDORS = {
     "Qualcomm": "https://www.qualcomm.com/drivers",
     "Creative": "https://support.creative.com/",
 }
+
+# Officially documented manufacturer scanning assistants. The pages, not
+# private APIs, expose the automated detection; we do not read results or
+# silently download/install their software.
+ASSISTANT_PAGES = {
+    "NVIDIA": "https://www.nvidia.com/en-us/software/nvidia-app/",
+    "AMD Radeon / AMD": "https://www.amd.com/en/resources/support-articles/faqs/GPU-131.html",
+    "Intel": "https://www.intel.com/content/www/us/en/support/detect.html",
+}
+
 
 # Vendor IDs in PnP identifiers, not arbitrary device-name substrings.
 PCI_VENDOR_IDS = {
@@ -151,8 +162,25 @@ def official_device_sources(devices, oem=None):
         if not url and oem is not None and is_trusted_support_url(oem.url):
             manufacturer = manufacturer or ("OEM: " + oem.manufacturer)
             url = oem.url
+        # NVIDIA App serves GeForce devices, not an assumed enterprise/Quadro
+        # driver channel. AMD Auto-Detect is for Radeon/Ryzen-compatible devices.
+        # Intel DSA is broad but explicitly does not support every Intel product.
+        assistant = ASSISTANT_PAGES.get(manufacturer, "")
+        lowered = name.casefold()
+        if manufacturer == "NVIDIA" and not ("geforce" in lowered or
+                                                "gtx" in lowered):
+            assistant = ""
+        elif manufacturer == "AMD Radeon / AMD" and not (
+                "radeon" in lowered or "ryzen" in lowered):
+            assistant = ""
+        if not is_trusted_support_url(assistant):
+            assistant = ""
+        if assistant:
+            guidance += (" Официальный инструмент может автоматически "
+                         "определить подходящие драйверы, но его результаты "
+                         "SmartCleaner не считывает.")
         result.append(DeviceDriverSource(name, version, manufacturer or "Не определён",
-                                          device_id, url, guidance))
+                                          device_id, url, guidance, assistant))
     return sorted(result, key=lambda entry: (entry.manufacturer.casefold(),
                                              entry.device.casefold(),
                                              entry.hardware_id.casefold()))
