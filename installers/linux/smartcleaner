@@ -1,0 +1,4 @@
+#!/bin/sh
+# Install with mode 755 as /usr/bin/smartcleaner.
+# -I excludes the current directory, user site and inherited PYTHONPATH.
+exec /usr/bin/python3 -I -c 'import sys; sys.path.insert(0, "/usr/share/smartcleaner"); from smartcleaner.gui import main; raise SystemExit(main())' "$@"

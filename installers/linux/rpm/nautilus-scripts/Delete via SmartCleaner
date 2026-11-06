@@ -1,0 +1,15 @@
+#!/bin/sh
+# Use individual arguments, never the newline-delimited Nautilus environment.
+[ "$#" -gt 0 ] || exit 1
+remaining=$#
+while [ "$remaining" -gt 0 ]; do
+    case "$1" in
+        /*) path=$1 ;;
+        *://*) exit 1 ;;
+        *) path=$PWD/$1 ;;
+    esac
+    shift
+    set -- "$@" "$path"
+    remaining=$((remaining - 1))
+done
+exec /usr/bin/smartcleaner --delete "$@"

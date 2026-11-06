@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=SmartCleaner
+Comment=System cleaning and optimization utility in CCleaner style
+Exec=smartcleaner
+Icon=system-file-manager
+Terminal=false
+Type=Application
+Categories=Utility;System;
+StartupNotify=true

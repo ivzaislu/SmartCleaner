@@ -1,0 +1,13 @@
+Package: smartcleaner
+Version: 2.0.0
+Section: utils
+Priority: optional
+Architecture: all
+Depends: python3 (>= 3.12), python3-pyside6.qtwidgets, python3-psutil, python3-cryptography (>= 42)
+Maintainer: SmartCleaner Team <team@smartcleaner.example>
+Description: SmartCleaner 2.0 - System cleaning and optimization utility
+ SmartCleaner is a professional system cleaning and optimization utility
+ designed in CCleaner style for Linux (Ubuntu, Debian, Linux Mint).
+ Features safe cleaning, disk analysis, duplicate finder, browser cache cleaning,
+ driver manager, system diagnostics, and SmartCleaner Delete utility.
+Homepage: https://smartcleaner.example
