@@ -645,7 +645,7 @@ class SmartCleanerMainWindow(QMainWindow if PYSIDE6_AVAILABLE else object):
 
         install = self._button(controls, "Перейти к обновлению выбранного", open_update)
         install.setEnabled(False)
-offers.itemSelectionChanged.connect(
+        offers.itemSelectionChanged.connect(
             lambda: install.setEnabled(bool(offers.selectedItems())))
 
         # Holding the button for 1500 ms triggers a WUA download only.
